@@ -75,6 +75,7 @@ private:
 
 public:
   // Execution - Control Flow specific
+    int instruction_count = 0;
 
   /// @brief Pointer to instruction to be executed after the current
   /// instruction

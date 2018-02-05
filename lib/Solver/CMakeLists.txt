@@ -33,8 +33,9 @@ klee_add_component(kleaverSolver
 set(LLVM_COMPONENTS
   support
 )
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -lcurl")
 klee_get_llvm_libs(LLVM_LIBS ${LLVM_COMPONENTS})
-target_link_libraries(kleaverSolver PUBLIC ${LLVM_LIBS})
+target_link_libraries(kleaverSolver PUBLIC ${LLVM_LIBS} curl)
 
 target_link_libraries(kleaverSolver PRIVATE
   kleeBasic
