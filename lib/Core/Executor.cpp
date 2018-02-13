@@ -103,6 +103,7 @@
 
 #include <fstream>
 #include <curl/curl.h>
+#include <klee/ExprBuilder.h>
 
 using namespace llvm;
 using namespace klee;
@@ -110,7 +111,12 @@ using namespace klee;
 klee::KInstruction *current_ki;
 klee::KInstruction *prev_ki;
 std::queue<std::pair<unsigned int, int>> id_guide;
+std::queue<std::pair<int, int>> switch_guide;
+std::queue<std::pair<int, int>> malloc_guide;
+std::queue<std::pair<int, int>> memop_guide;
+std::queue<klee::InstructionInfo> instruction_info;
 int pop_count;
+bool async_mode;
 
 
 namespace {
@@ -714,11 +720,11 @@ void Executor::branch(ExecutionState &state,
             ExecutionState *ns = es->branch();
             addedStates.push_back(ns);
             result.push_back(ns);
-            es->ptreeNode->data = 0;
-            std::pair<PTree::Node *, PTree::Node *> res =
-                    processTree->split(es->ptreeNode, ns, es);
-            ns->ptreeNode = res.first;
-            es->ptreeNode = res.second;
+//            es->ptreeNode->data = 0;
+//            std::pair<PTree::Node *, PTree::Node *> res =
+//                    processTree->split(es->ptreeNode, ns, es);
+//            ns->ptreeNode = res.first;
+//            es->ptreeNode = res.second;
         }
     }
 
@@ -777,7 +783,9 @@ void Executor::branch(ExecutionState &state,
 Executor::StatePair
 Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
     // log current ki
+//    current_ki = current.prevPC;
     current_ki = current.pc;
+
 //    condition.get()->dump();
     Solver::Validity res;
     std::map<ExecutionState *, std::vector<SeedInfo> >::iterator it =
@@ -817,16 +825,16 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
     solver->setTimeout(timeout);
     bool success;
     success = solver->evaluate(current, condition, res);
-//    if(firstTime) {
-//        success = solver->evaluate(current, condition, res);
-//    }
-//    else if (!firstTime && current_ki->info->file.find("klee/runtime") == std::string::npos) {
-//        res = Solver::Unknown;
-//    }
-//    else {
-//        success = solver->evaluate(current, condition, res);
-//    }
 
+    if (!concrete_run &&
+            current_ki->info->file.find("klee/runtime") == std::string::npos) {
+        std::ofstream ofile("/tmp/sym-path", std::ios::app);
+        if (ofile.is_open()) {
+            ofile << current_ki->info->id << "\t" << res
+                  << "\t" << current_ki->info->file << current_ki->info->line<< "\n";
+        }
+        ofile.close();
+    }
     solver->setTimeout(0);
     if (!success) {
         current.pc = current.prevPC;
@@ -929,30 +937,28 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
             }
         }
 
-        if (!firstTime && !id_guide.empty() &&
+        if (!concrete_run &&
             current_ki->info->file.find("klee/runtime") == std::string::npos) {
-//            std::pair<klee::KInstruction *, int> foo = guide.front();
+
             std::pair<int, int> foo = id_guide.front();
-            id_guide.pop();
+
             if (current_ki->info->id != foo.first || res != foo.second) {
-                std::cout << "current ki: " << current_ki->info->id << " foo.first: " << foo.first << std::endl;
-                std::cout << "current res:" << res << " foo.second: " << foo.second << std::endl;
-                std::cout << "Branch Result Stack Does Not Match (True)" << std::endl;
-                std::cout << "Pop count: " << pop_count << std::endl;
-                std::cout << "Good Bye!" << std::endl;
-                exit(1);
+                // posix runtime uses some libc function
+                // so there are some extra libc path occure in sym-path
+                // Just get ignore it. It won't affect the constraints.
+                return StatePair(&current, 0);
             } else {
-//            std::cout<< "Poping queue (True)" <<std::endl;
+                id_guide.pop();
                 pop_count++;
             }
         }
 
-        if (firstTime && current_ki->info->file.find("klee/runtime") == std::string::npos) {
-                std::pair<int, int> tmp;
-                tmp = std::make_pair(current_ki->info->id, res);
-                id_guide.push(tmp);
-                std::cout << "push: id: " << current_ki->info->id << " Result: " << res << std::endl;
-                std::cout << "push count: " << id_guide.size() << std::endl;
+        if (concrete_run && current_ki->info->file.find("klee/runtime") == std::string::npos) {
+            std::pair<int, int> tmp;
+            tmp = std::make_pair(current_ki->info->id, res);
+            id_guide.push(tmp);
+
+            instruction_info.push(*current_ki->info);
 
         }
         prev_ki = current_ki;
@@ -963,45 +969,42 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                 current.pathOS << "0";
             }
         }
-        if (!firstTime && !id_guide.empty() &&
+        if (!concrete_run &&
             current_ki->info->file.find("klee/runtime") == std::string::npos) {
             std::pair<int, int> foo = id_guide.front();
-            id_guide.pop();
+
 
             if (current_ki->info->id != foo.first || res != foo.second) {
-                std::cout << "current ki: " << current_ki->info->id << " foo.first: " << foo.first << std::endl;
-                std::cout << "current res:" << res << " foo.second: " << foo.second << std::endl;
-                std::cout << "Branch Result Stack Does Not Match (False)" << std::endl;
-                std::cout << "Pop count: " << pop_count << std::endl;
-                std::cout << "Good Bye!" << std::endl;
-                exit(1);
+                return StatePair(0, &current);
             } else {
-//              std::cout << "Poping queue (False)" <<std::endl;
+                id_guide.pop();
                 pop_count++;
             }
         }
 
-        if (firstTime && current_ki->info->file.find("klee/runtime") == std::string::npos) {
+        if (concrete_run && current_ki->info->file.find("klee/runtime") == std::string::npos) {
             std::pair<int, int> tmp;
             tmp = std::make_pair(current_ki->info->id, res);
             id_guide.push(tmp);
-
-            std::cout << "push: id: " << current_ki->info->id << " Result: " << res << std::endl;
-            std::cout << "push count: " << id_guide.size() << std::endl;
         }
 
         prev_ki = current_ki;
         return StatePair(0, &current);
     } else {
-//      std::cout<<"current ki: " << current_ki << std::endl;
-        if (!firstTime && !id_guide.empty() &&
+        if (!concrete_run && !id_guide.empty() &&
             current_ki->info->file.find("klee/runtime") == std::string::npos) {
             std::pair<unsigned int, int> foo = id_guide.front();
             id_guide.pop();
             pop_count++;
+            while (foo.first != current_ki->info->id && !id_guide.empty()) {
+//                std::cout << current_ki->info->id << std::endl;
+                foo = id_guide.front();
+                id_guide.pop();
+                pop_count++;
+            }
+
             if (current_ki->info->id == foo.first) {
                 if (foo.second == Solver::False) {
-//                    addConstraint(current, condition);
                     ExecutionState *falseState = new ExecutionState(current);
 
                     addConstraint(current, Expr::createIsZero(condition));
@@ -1011,8 +1014,13 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                     llvm::raw_string_ostream query_log(str);
                     std::vector<const Array *> objects;
 
-                    for (unsigned i = 0; i != falseState->symbolics.size(); ++i)
-                        objects.push_back(falseState->symbolics[i].second);
+                    for (unsigned i = 0; i != falseState->symbolics.size(); ++i){
+                        if (falseState->symbolics[i].first->name.find("model_version") == std::string::npos &&
+                            falseState->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                            objects.push_back(falseState->symbolics[i].second);
+                        }
+                    }
+
 
                     const Array* const *evalArraysBegin = 0;
                     const Array* const *evalArraysEnd = 0;
@@ -1021,17 +1029,20 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                         evalArraysBegin = &((objects)[0]);
                         evalArraysEnd = &((objects)[0]) + objects.size();
                     }
-
-                    Query q = Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
-                    ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-                    post_data(query_log.str());
-//                    terminateStateOnFork(*falseState);
+                    if (async_mode) {
+                        Query q = Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
+                        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin,
+                                                 evalArraysEnd);
+                        post_data(query_log.str());
+                    }
+                    else {
+                        interpreterHandler->processTestCase(*falseState, 0, 0);
+                    }
 
                     prev_ki = current_ki;
                     return StatePair(0, &current);
                 } else if (foo.second == Solver::True) {
                     // True State, send normal cond
-//                    addConstraint(current, Expr::createIsZero(condition));
                     ExecutionState *falseState = new ExecutionState(current);
 
                     addConstraint(current, condition);
@@ -1042,8 +1053,12 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                     llvm::raw_string_ostream query_log(str);
                     std::vector<const Array *> objects;
 
-                    for (unsigned i = 0; i != falseState->symbolics.size(); ++i)
-                        objects.push_back(falseState->symbolics[i].second);
+                    for (unsigned i = 0; i != falseState->symbolics.size(); ++i){
+                        if (falseState->symbolics[i].first->name.find("model_version") == std::string::npos &&
+                            falseState->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                            objects.push_back(falseState->symbolics[i].second);
+                        }
+                    }
 
                     const Array* const *evalArraysBegin = 0;
                     const Array* const *evalArraysEnd = 0;
@@ -1052,23 +1067,33 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                         evalArraysBegin = &((objects)[0]);
                         evalArraysEnd = &((objects)[0]) + objects.size();
                     }
-
-                    Query q = Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
-                    ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-                    post_data(query_log.str());
-//                    std::cout << query_log.str() << std::endl;
-//                    ExprPPrinter::printConstraints(*outp, falseState->constraints);
-
-//                    terminateStateOnFork(*falseState);
+                    if (async_mode) {
+                        Query q = Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
+                        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin,
+                                                 evalArraysEnd);
+                        post_data(query_log.str());
+                    }
+                    else {
+                        interpreterHandler->processTestCase(*falseState, 0, 0);
+                    }
 
                     prev_ki = current_ki;
                     return StatePair(&current, 0);
                 }
             } else {
-                std::cout << "Branch Instruction Stack Does Not Match" << std::endl;
-                std::cout << "Good Bye!" << std::endl;
-                exit(1);
+//                std::cout << "Branch Instruction Stack Does Not Match" << std::endl;
+//                std::cout << "current id" << current_ki->info->id << "\nfile: " << current_ki->info->file << std::endl;
+                return StatePair(0, 0);
+//                exit(1);
             }
+        }
+
+        // TODO:
+        // The posix path haven't been travel by concrete, what should return?
+        if (current_ki->info->file.find("klee/runtime")) {
+//            std::cout << "posix runtime" << std::endl;
+            return StatePair(0, 0);
+//            exit(1);
         }
 
         TimerStatIncrementer timer(stats::forkTime);
@@ -1713,9 +1738,6 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
             SwitchInst *si = cast<SwitchInst>(i);
             ref<Expr> cond = eval(ki, 0, state).value;
             BasicBlock *bb = si->getParent();
-//            if (current_ki->info->id == 14793) {
-//                std::cout << "ready to break" << std::endl;
-//            }
 
             cond = toUnique(state, cond);
             if (ConstantExpr *CE = dyn_cast<ConstantExpr>(cond)) {
@@ -1726,26 +1748,36 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 unsigned index = si->findCaseValue(ci).getSuccessorIndex();
                 transferToBasicBlock(si->getSuccessor(index), si->getParent(), state);
 
-                if (firstTime && ki->info->file.find("klee/runtime") == std::string::npos) {
+                if (concrete_run && ki->info->file.find("klee/runtime") == std::string::npos) {
                     std::pair<int, int> tmp;
                     tmp = std::make_pair(current_ki->info->id, index);
-                    id_guide.push(tmp);
+                    switch_guide.push(tmp);
 
-                    std::cout << "push: id: " << ki->info->id << " Result: " << index << std::endl;
-                    std::cout << "push count: " << id_guide.size() << std::endl;
-                } else if (!firstTime && ki->info->file.find("klee/runtime") == std::string::npos) {
-                    id_guide.pop();
+                } else if (!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos) {
+                    std::pair<int, int> tmp = id_guide.front();
+                    if (tmp.first  == ki->info->id) {
+                        switch_guide.pop();
+                        pop_count++;
+                    }
                 }
             }
-            else if(!firstTime && ki->info->file.find("klee/runtime") == std::string::npos) {
+            else if(!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos) {
                 //add constraints? probably?
                 //Todo:
                 //retrieve sucessor index from guide, then replace the following index into successor index.
                 unsigned index;
                 std::pair<int, int> tmp;
-                tmp = id_guide.front();
-                id_guide.pop();
+                tmp = switch_guide.front();
+                switch_guide.pop();
+                pop_count++;
 
+
+
+                while (tmp.first != ki->info->id && !switch_guide.empty()) {
+                    tmp = switch_guide.front();
+                    switch_guide.pop();
+                    pop_count++;
+                }
                 if (tmp.first == ki->info->id) {
                     index = tmp.second;
                 }
@@ -1754,10 +1786,132 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                     exit(1);
                 }
 
-//                llvm::IntegerType *Ty = cast<IntegerType>(si->getCondition()->getType());
-//                ConstantInt *ci = ConstantInt::get(Ty, CE->getZExtValue());
-//                unsigned index = si->findCaseValue(ci).getSuccessorIndex();
+
                 transferToBasicBlock(si->getSuccessor(index), si->getParent(), state);
+
+
+
+                std::vector<BasicBlock *> bbOrder;
+                std::map<BasicBlock *, ref<Expr> > branchTargets;
+
+                std::map<ref<Expr>, BasicBlock *> expressionOrder;
+
+                // Iterate through all non-default cases and order them by expressions
+                for (SwitchInst::CaseIt i = si->case_begin(), e = si->case_end(); i != e;
+                     ++i) {
+                    ref<Expr> value = evalConstant(i.getCaseValue());
+
+                    BasicBlock *caseSuccessor = i.getCaseSuccessor();
+                    expressionOrder.insert(std::make_pair(value, caseSuccessor));
+                }
+
+                // Track default branch values
+                ref<Expr> defaultValue = ConstantExpr::alloc(1, Expr::Bool);
+
+                // iterate through all non-default cases but in order of the expressions
+                for (std::map<ref<Expr>, BasicBlock *>::iterator
+                             it = expressionOrder.begin(),
+                             itE = expressionOrder.end();
+                     it != itE; ++it) {
+                    ref<Expr> match = EqExpr::create(cond, it->first);
+
+                    // Make sure that the default value does not contain this target's value
+                    defaultValue = AndExpr::create(defaultValue, Expr::createIsZero(match));
+
+                    // Check if control flow could take this case
+                    bool result;
+                    bool success = solver->mayBeTrue(state, match, result);
+                    assert(success && "FIXME: Unhandled solver failure");
+                    (void) success;
+                    if (result) {
+                        BasicBlock *caseSuccessor = it->second;
+
+                        // Handle the case that a basic block might be the target of multiple
+                        // switch cases.
+                        // Currently we generate an expression containing all switch-case
+                        // values for the same target basic block. We spare us forking too
+                        // many times but we generate more complex condition expressions
+                        // TODO Add option to allow to choose between those behaviors
+                        std::pair<std::map<BasicBlock *, ref<Expr> >::iterator, bool> res =
+                                branchTargets.insert(std::make_pair(
+                                        caseSuccessor, ConstantExpr::alloc(0, Expr::Bool)));
+
+                        res.first->second = OrExpr::create(match, res.first->second);
+
+                        // Only add basic blocks which have not been target of a branch yet
+                        if (res.second) {
+                            bbOrder.push_back(caseSuccessor);
+                        }
+                    }
+                }
+
+                // Check if control could take the default case
+                bool res;
+                bool success = solver->mayBeTrue(state, defaultValue, res);
+                assert(success && "FIXME: Unhandled solver failure");
+                (void) success;
+                if (res) {
+                    std::pair<std::map<BasicBlock *, ref<Expr> >::iterator, bool> ret =
+                            branchTargets.insert(
+                                    std::make_pair(si->getDefaultDest(), defaultValue));
+                    if (ret.second) {
+                        bbOrder.push_back(si->getDefaultDest());
+                    }
+                }
+
+                // Fork the current state with each state having one of the possible
+                // successors of this switch
+                std::vector<ref<Expr> > conditions;
+                for (std::vector<BasicBlock *>::iterator it = bbOrder.begin(),
+                             ie = bbOrder.end();
+                     it != ie; ++it) {
+                    conditions.push_back(branchTargets[*it]);
+                }
+                std::vector<ExecutionState *> branches;
+                branch(state, conditions, branches);
+
+//                std::vector<ExecutionState *>::iterator bit = branches.begin();
+//                for (std::vector<BasicBlock *>::iterator it = bbOrder.begin(),
+//                             ie = bbOrder.end();
+//                     it != ie; ++it) {
+//                    ExecutionState *es = *bit;
+//                    if (es)
+//                        transferToBasicBlock(*it, bb, *es);
+//                    ++bit;
+//                }
+
+                for (int i = 1; i < branches.size(); ++i) {
+                    ExecutionState *es = branches[i];
+                    std::string str;
+                    llvm::raw_string_ostream query_log(str);
+                    std::vector<const Array *> objects;
+
+                    for (unsigned i = 0; i != es->symbolics.size(); ++i){
+                        if (es->symbolics[i].first->name.find("model_version") == std::string::npos &&
+                            es->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                            objects.push_back(es->symbolics[i].second);
+                        }
+                    }
+
+
+                    const Array* const *evalArraysBegin = 0;
+                    const Array* const *evalArraysEnd = 0;
+
+                    if ((0 != &objects) && (false == objects.empty())) {
+                        evalArraysBegin = &((objects)[0]);
+                        evalArraysEnd = &((objects)[0]) + objects.size();
+                    }
+                    if (async_mode) {
+                        Query q = Query(es->constraints, ConstantExpr::alloc(0, Expr::Bool));
+                        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin,
+                                                 evalArraysEnd);
+                        post_data(query_log.str());
+                    }
+                    else {
+                        interpreterHandler->processTestCase(*es, 0, 0);
+                    }
+                }
+//                addedStates.clear();
             }
             else
             {
@@ -2681,6 +2835,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 void Executor::updateStates(ExecutionState *current) {
     if (!addedStates.empty()) {
         std::cout << "state not empty" << std::endl;
+        addedStates.clear();
     }
 
     if (searcher) {
@@ -2908,7 +3063,6 @@ void Executor::run(ExecutionState &initialState) {
         ExecutionState &state = searcher->selectState();
         KInstruction *ki = state.pc;
         stepInstruction(state);
-
         executeInstruction(state, ki);
         processTimers(&state, MaxInstructionTime);
 
@@ -3036,13 +3190,18 @@ void Executor::terminateStateEarly(ExecutionState &state,
         (AlwaysOutputSeeds && seedMap.count(&state))){}
 //        interpreterHandler->processTestCase(state, (message + "\n").str().c_str(),
 //                                            "early");
-    if (!firstTime) {
+    if (!concrete_run) {
         std::string str;
         llvm::raw_string_ostream query_log(str);
         std::vector<const Array *> objects;
 
-        for (unsigned i = 0; i != state.symbolics.size(); ++i)
-            objects.push_back(state.symbolics[i].second);
+        for (unsigned i = 0; i != state.symbolics.size(); ++i){
+            if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
+                    state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                objects.push_back(state.symbolics[i].second);
+            }
+        }
+
 
         const Array *const *evalArraysBegin = 0;
         const Array *const *evalArraysEnd = 0;
@@ -3051,12 +3210,16 @@ void Executor::terminateStateEarly(ExecutionState &state,
             evalArraysBegin = &((objects)[0]);
             evalArraysEnd = &((objects)[0]) + objects.size();
         }
+        if (async_mode) {
+            Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
 
-        Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
 
-
-        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-        post_data(query_log.str());
+            ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
+            post_data(query_log.str());
+        }
+        else {
+            interpreterHandler->processTestCase(state, 0, 0);
+        }
     }
     terminateState(state);
 }
@@ -3066,13 +3229,17 @@ void Executor::terminateStateOnExit(ExecutionState &state) {
         (AlwaysOutputSeeds && seedMap.count(&state))) {
 //        interpreterHandler->processTestCase(state, 0, 0);
     }
-    if (!firstTime) {
+    if (!concrete_run) {
         std::string str;
         llvm::raw_string_ostream query_log(str);
         std::vector<const Array *> objects;
 
-        for (unsigned i = 0; i != state.symbolics.size(); ++i)
-            objects.push_back(state.symbolics[i].second);
+        for (unsigned i = 0; i != state.symbolics.size(); ++i){
+            if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
+                state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                objects.push_back(state.symbolics[i].second);
+            }
+        }
 
         const Array *const *evalArraysBegin = 0;
         const Array *const *evalArraysEnd = 0;
@@ -3081,12 +3248,16 @@ void Executor::terminateStateOnExit(ExecutionState &state) {
             evalArraysBegin = &((objects)[0]);
             evalArraysEnd = &((objects)[0]) + objects.size();
         }
+        if (async_mode) {
+            Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
 
-        Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
 
-
-        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-        post_data(query_log.str());
+            ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
+            post_data(query_log.str());
+        }
+        else {
+            interpreterHandler->processTestCase(state, 0, 0);
+        }
     }
     terminateState(state);
 }
@@ -3189,13 +3360,17 @@ void Executor::terminateStateOnError(ExecutionState &state,
 
 //        interpreterHandler->processTestCase(state, msg.str().c_str(), suffix);
     }
-    if (!firstTime) {
+    if (!concrete_run) {
         std::string str;
         llvm::raw_string_ostream query_log(str);
         std::vector<const Array *> objects;
 
-        for (unsigned i = 0; i != state.symbolics.size(); ++i)
-            objects.push_back(state.symbolics[i].second);
+        for (unsigned i = 0; i != state.symbolics.size(); ++i){
+            if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
+                state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                objects.push_back(state.symbolics[i].second);
+            }
+        }
 
         const Array *const *evalArraysBegin = 0;
         const Array *const *evalArraysEnd = 0;
@@ -3204,12 +3379,16 @@ void Executor::terminateStateOnError(ExecutionState &state,
             evalArraysBegin = &((objects)[0]);
             evalArraysEnd = &((objects)[0]) + objects.size();
         }
+        if (async_mode) {
+            Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
 
-        Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
 
-
-        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-        post_data(query_log.str());
+            ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
+            post_data(query_log.str());
+        }
+        else {
+            interpreterHandler->processTestCase(state, 0, 0);
+        }
     }
     terminateState(state);
 
@@ -3365,8 +3544,26 @@ void Executor::executeAlloc(ExecutionState &state,
                             KInstruction *target,
                             bool zeroMemory,
                             const ObjectState *reallocFrom) {
+    current_ki = state.pc;
     size = toUnique(state, size);
     if (ConstantExpr *CE = dyn_cast<ConstantExpr>(size)) {
+        ref<ConstantExpr> example;
+        bool success = solver->getValue(state, size, example);
+
+        std::string number;
+        example->toString(number);
+
+        if (concrete_run &&
+                current_ki->info->file.find("klee/runtime") == std::string::npos) {
+            std::pair<int, int> foo = std::make_pair(current_ki->info->id, CE->getZExtValue());
+            malloc_guide.push(foo);
+        }
+        else if(current_ki->info->file.find("klee/runtime") == std::string::npos) {
+            std::pair<int, int> foo = malloc_guide.front();
+            if (foo.first == current_ki->info->id) {
+                malloc_guide.pop();
+            }
+        }
         const llvm::Value *allocSite = state.prevPC->inst;
         size_t allocationAlignment = getAllocationAlignment(allocSite);
         MemoryObject *mo =
@@ -3392,6 +3589,50 @@ void Executor::executeAlloc(ExecutionState &state,
             }
         }
     } else {
+        // TODO:
+        // Need to think about how to add constraints.
+        std::pair<int, int> foo = malloc_guide.front();
+        while (!malloc_guide.empty() && foo.first !=  current_ki->info->id) {
+            malloc_guide.pop();
+            pop_count++;
+            foo = malloc_guide.front();
+        }
+        if (current_ki->info->id == foo.first) {
+            std::cout << foo.second << std::endl;
+            malloc_guide.pop();
+            pop_count++;
+
+            const llvm::Value *allocSite = state.prevPC->inst;
+            size_t allocationAlignment = getAllocationAlignment(allocSite);
+            MemoryObject *mo =
+                    memory->allocate(foo.second, isLocal, /*isGlobal=*/false,
+                                     allocSite, allocationAlignment);
+            if (!mo) {
+                bindLocal(target, state,
+                          ConstantExpr::alloc(0, Context::get().getPointerWidth()));
+            } else {
+                ObjectState *os = bindObjectInState(state, mo, isLocal);
+                if (zeroMemory) {
+                    os->initializeToZero();
+                } else {
+                    os->initializeToRandom();
+                }
+                bindLocal(target, state, mo->getBaseExpr());
+
+                if (reallocFrom) {
+                    unsigned count = std::min(reallocFrom->size, os->size);
+                    for (unsigned i = 0; i < count; i++)
+                        os->write(i, reallocFrom->read8(i));
+                    state.addressSpace.unbindObject(reallocFrom->getObject());
+                }
+            }
+            return;
+        }
+        else {
+            perror("malloc error");
+            exit(1);
+        }
+
         // XXX For now we just pick a size. Ideally we would support
         // symbolic sizes fully but even if we don't it would be better to
         // "smartly" pick a value, for example we could fork and pick the
@@ -3536,8 +3777,8 @@ void Executor::executeMemoryOperation(ExecutionState &state,
                                       KInstruction *target /* undef if write */) {
     Expr::Width type = (isWrite ? value->getWidth() :
                         getWidthForLLVMType(target->inst->getType()));
+    current_ki = state.pc;
     unsigned bytes = Expr::getMinBytesForWidth(type);
-
     if (SimplifySymIndices) {
         if (!isa<ConstantExpr>(address))
             address = state.constraints.simplifyExpr(address);
@@ -3563,6 +3804,14 @@ void Executor::executeMemoryOperation(ExecutionState &state,
         }
 
         ref<Expr> offset = mo->getOffsetExpr(address);
+        if (concrete_run) {
+            ref<ConstantExpr> tmp;
+            std::string offset_val;
+            solver->getValue(state, offset, tmp);
+            tmp->toString(offset_val);
+            std::pair<int, int> foo = std::make_pair(current_ki->info->id, std::stoi(offset_val));
+            memop_guide.push(foo);
+        }
 
         bool inBounds;
         solver->setTimeout(coreSolverTimeout);
@@ -3575,7 +3824,34 @@ void Executor::executeMemoryOperation(ExecutionState &state,
             terminateStateEarly(state, "Query timed out (bounds check).");
             return;
         }
+        if (!inBounds && current_ki->info->file.find("klee/runtime") == std::string::npos) {
+            std::pair<int, int> foo = memop_guide.front();
+            while(!memop_guide.empty() && current_ki->info->id != foo.first) {
+                memop_guide.pop();
+                pop_count++;
+                foo = memop_guide.front();
+            }
+            if (current_ki->info->id == foo.first) {
+                memop_guide.pop();
+                pop_count++;
+                ExprBuilder *builder;
+                builder = createDefaultExprBuilder();
+                llvm::APInt apInt = APInt(offset->getWidth(), foo.second);
+                offset = builder->Constant(apInt);
+            }
+        }
 
+        solver->setTimeout(coreSolverTimeout);
+        success = solver->mustBeTrue(state,
+                                          mo->getBoundsCheckOffset(offset, bytes),
+                                          inBounds);
+        if (!success) {
+            state.pc = state.prevPC;
+            terminateStateEarly(state, "Query timed out (bounds check).");
+            return;
+        }
+
+        solver->setTimeout(0);
         if (inBounds) {
             const ObjectState *os = op.second;
             if (isWrite) {
@@ -4064,7 +4340,14 @@ Interpreter *Interpreter::create(LLVMContext &ctx, const InterpreterOptions &opt
 
 void Executor::post_data(std::string data) {
     std::replace(data.begin(), data.end(), '\n', ' ');
-    std::string foo = "query=" + data + "&&name=arg0";
+    std::string solver;
+    if (CoreSolverToUse == Z3_SOLVER) {
+        solver = "engine=z3&&";
+    }
+    if (CoreSolverToUse == STP_SOLVER) {
+        solver = "engine=stp&&";
+    }
+    std::string foo = solver +"query=" + data;
     const char* message = foo.c_str();
     CURL *curl;
     CURLcode res;

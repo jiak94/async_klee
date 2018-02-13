@@ -497,19 +497,24 @@ void ExprPPrinter::printQuery(llvm::raw_ostream &os,
                                               ie = sortedArray.end();
          it != ie; ++it) {
       const Array *A = *it;
-      PC << "array " << A->name << "[" << A->size << "]"
-         << " : w" << A->domain << " -> w" << A->range << " = ";
-      if (A->isSymbolicArray()) {
-        PC << "symbolic";
-      } else {
-        PC << "[";
-        for (unsigned i = 0, e = A->size; i != e; ++i) {
-          if (i)
-            PC << " ";
-          PC << A->constantValues[i];
+        if((A->name.find("model_version") == std::string::npos &&
+        A->name.find("-data-stat") == std::string::npos)) {
+
+
+            PC << "array " << A->name << "[" << A->size << "]"
+               << " : w" << A->domain << " -> w" << A->range << " = ";
+            if (A->isSymbolicArray()) {
+                PC << "symbolic";
+            } else {
+                PC << "[";
+                for (unsigned i = 0, e = A->size; i != e; ++i) {
+                    if (i)
+                        PC << " ";
+                    PC << A->constantValues[i];
+                }
+                PC << "]";
+            }
         }
-        PC << "]";
-      }
       PC.breakLine();
     }
   }
@@ -520,7 +525,14 @@ void ExprPPrinter::printQuery(llvm::raw_ostream &os,
   unsigned indent = PC.pos;
   for (ConstraintManager::const_iterator it = constraints.begin(),
          ie = constraints.end(); it != ie;) {
-    p.print(*it, PC);
+      std::string str;
+      llvm::raw_string_ostream log(str);
+      it->get()->print(log);
+      if (log.str().find("model_version") == std::string::npos &&
+              log.str().find("-data-stat") == std::string::npos) {
+          p.print(*it, PC);
+      }
+
     ++it;
     if (it != ie)
       PC.breakLine(indent);
@@ -550,7 +562,10 @@ void ExprPPrinter::printQuery(llvm::raw_ostream &os,
     PC.breakLine(indent - 1);
     PC << '[';
     for (const Array * const* it = evalArraysBegin; it != evalArraysEnd; ++it) {
-      PC << (*it)->name;
+        if ((*it)->name.find("model_version") == std::string::npos &&
+                (*it)->name.find("-data-stat") == std::string::npos) {
+            PC << (*it)->name;
+        }
       if (it + 1 != evalArraysEnd)
         PC.breakLine(indent);
     }

@@ -76,8 +76,8 @@ using namespace llvm;
 using namespace klee;
 
 
-bool firstTime;
-bool final_step = false;
+bool concrete_run;
+//std::queue<klee::InstructionInfo> instruction_info;
 char* post_url;
 int post_port;
 
@@ -242,6 +242,26 @@ namespace {
             PORT("port",
                 cl::desc("Sover Port"),
                 cl::init(5000));
+
+    cl::opt<bool>
+            GenPathLog("gen-path-log",
+                cl::desc("Generate Path Log"),
+                cl::init(false));
+
+    cl::opt<bool>
+            SymbolicOnly("async-symbolic-run-only",
+                cl::desc("Run Symbolic Only"),
+                cl::init(false));
+
+    cl::opt<bool>
+            Async("async",
+                cl::desc("Enable async mode"),
+                cl::init(true));
+
+    cl::opt<std::string>
+            PathLogFile("path-log-file",
+                cl::desc("PathLog File"),
+                cl::init("-"));
 }
 
 extern cl::opt<double> MaxTime;
@@ -1176,6 +1196,36 @@ static llvm::Module *linkWithUclibc(llvm::Module *mainModule, StringRef libDir) 
 
 #endif
 
+void parse_path_log(std::string file_path) {
+    std::ifstream path_log(file_path);
+    int id, result;
+    int switch_val = -1;
+    while (path_log >> id >> result) {
+        if (id == -1) {
+            switch_val += id;
+            continue;
+        }
+
+        if (switch_val == -1) {
+            std::pair<int, int> foo = std::make_pair(id, result);
+            id_guide.push(foo);
+        }
+        if (switch_val == -2) {
+            std::pair<int, int> foo = std::make_pair(id, result);
+            switch_guide.push(foo);
+        }
+        if (switch_val == -3) {
+            std::pair<int, int> foo = std::make_pair(id, result);
+            malloc_guide.push(foo);
+        }
+        if (switch_val == -4) {
+            std::pair<int, int> foo = std::make_pair(id, result);
+            memop_guide.push(foo);
+        }
+    }
+    path_log.close();
+}
+
 int main(int argc, char **argv, char **envp) {
     int fd[2 * NUM_PIPES];
     int i = 0;
@@ -1186,7 +1236,33 @@ int main(int argc, char **argv, char **envp) {
         }
 
     }
-    pid_t second_round = fork();
+
+    parseArguments(argc, argv);
+
+    if (GenPathLog && SymbolicOnly) {
+        perror("Can't generate PathLog For Async-Symbolic-Only");
+        exit(1);
+    }
+
+    if (Async && SymbolicOnly && !PathLogFile.getValue().compare("-")) {
+        std::string s = PathLogFile.getValue();
+        perror("PathLog file is required");
+        exit(1);
+    }
+
+    async_mode = Async;
+
+    pid_t second_round;
+
+    if (!SymbolicOnly) {
+        second_round = fork();
+    }
+    else {
+        second_round =  1;
+        concrete_run = !SymbolicOnly;
+        parse_path_log(PathLogFile.getValue());
+    }
+
 
     std::pair<unsigned int, int> foo;
     if (second_round == 0) {
@@ -1195,7 +1271,7 @@ int main(int argc, char **argv, char **envp) {
         llvm::InitializeNativeTarget();
 
 //
-        parseArguments(argc, argv);
+//        parseArguments(argc, argv);
         sys::PrintStackTraceOnErrorSignal();
 //
 
@@ -1492,21 +1568,73 @@ int main(int argc, char **argv, char **envp) {
                 }
             }
             //child process, do concrete here
-            firstTime = true;
+            concrete_run = true;
+            std::clock_t start = std::clock();
             interpreter->runFunctionAsMain(mainFn, pArgc, pArgv, pEnvp);
-            std::cout << "id_guide size: " << id_guide.size() << std::endl;
-            close(fd[P1_READ]);
-            close(fd[P1_WRITE]);
-
+            std::cout<< "Time consume: " << (std::clock() - start)/(double) CLOCKS_PER_SEC << std::endl;
+            std::ofstream path_log("/tmp/klee_path_log", std::ios::out | std::ios::trunc);
+            std::ofstream gen_path;
+            if (GenPathLog) {
+                gen_path = std::ofstream (handler->getOutputFilename("path_log"), std::ios::out | std::ios::trunc);
+            }
             while (!id_guide.empty()) {
                 foo = id_guide.front();
                 id_guide.pop();
-//                std::cout << "Sending: " << foo.first << "  " << foo.second << std::endl;
-                if (write(fd[P2_WRITE], &foo, sizeof(foo)) < 0) {
-                    perror("Child: Failed to write response value");
-                    exit(EXIT_FAILURE);
+                if (path_log.is_open()) {
+                    path_log << foo.first << "\t" << foo.second << "\n";
+                }
+                if (gen_path.is_open()) {
+                    gen_path << foo.first << "\t" << foo.second << "\n";
+                }
+
+            }
+            path_log <<-1 << "\t" << -1 << "\n";
+            if (gen_path.is_open()) gen_path <<-1 << "\t" << -1 << "\n";
+
+            while (!switch_guide.empty()) {
+                foo = switch_guide.front();
+                switch_guide.pop();
+                if (path_log.is_open()) {
+                    path_log << foo.first << "\t" << foo.second << "\n";
+                }
+                if (gen_path.is_open()) {
+                    gen_path << foo.first << "\t" << foo.second << "\n";
+                }
+
+            }
+
+            path_log << -1 << "\t" << -1 << "\n";
+            if (gen_path.is_open()) gen_path <<-1 << "\t" << -1 << "\n";
+
+            while (!malloc_guide.empty()) {
+                foo = malloc_guide.front();
+                malloc_guide.pop();
+                if (path_log.is_open()) {
+                    path_log << foo.first << "\t" << foo.second << "\n";
+                }
+
+                if (gen_path.is_open()) {
+                    gen_path << foo.first << "\t" << foo.second << "\n";
                 }
             }
+
+            path_log << -1 << "\t" << -1 << "\n";
+            if (gen_path.is_open()) gen_path <<-1 << "\t" << -1 << "\n";
+
+            while (!memop_guide.empty()) {
+                foo = memop_guide.front();
+                memop_guide.pop();
+                if (path_log.is_open()) {
+                    path_log << foo.first << "\t" << foo.second << "\n";
+                }
+
+                if (gen_path.is_open()) {
+                    gen_path << foo.first << "\t" << foo.second << "\n";
+                }
+            }
+
+            path_log.close();
+            if (gen_path.is_open()) gen_path.close();
 //
             while (!seeds.empty()) {
                 kTest_free(seeds.back());
@@ -1583,47 +1711,29 @@ int main(int argc, char **argv, char **envp) {
         handler->getInfoStream() << stats.str();
 
         delete handler;
-        close(fd[P2_READ]);
-        close(fd[P2_WRITE]);
     } else {
 
         //parent process, do symbolic here.
         wait(NULL);
 
-        close(fd[P2_READ]);
-        close(fd[P2_WRITE]);
-
-        int len;
         int count = 0;
-        do {
-            len = read(fd[P1_READ], &foo, sizeof(foo));
-//            std::cout << foo.first << "  " << foo.second << std::endl;
-            id_guide.push(foo);
-            count++;
-        } while (len != 0);
-
-        std::cout<< "Receive: " << count << std::endl;
-
-        close(fd[P1_READ]);
-        close(fd[P1_WRITE]);
-
-        if (len == 0) {
-            perror("0 return");
+        if (SymbolicOnly) {
+            parse_path_log(PathLogFile);
         }
-        if (len == -1) {
-            std::cout << errno << std::endl;
-            perror("1 return");
+        else {
+            parse_path_log("/tmp/klee_path_log");
         }
 
-        firstTime = false;
+        int id, result;
+        std::cout << id_guide.size() << " " << switch_guide.size() << " "<<
+                  malloc_guide.size() << " " << memop_guide.size() << std::endl;
+
+        concrete_run = false;
         atexit(llvm_shutdown);  // Call llvm_shutdown() on exit.
 
         llvm::InitializeNativeTarget();
 
-//
-        parseArguments(argc, argv);
         sys::PrintStackTraceOnErrorSignal();
-//
 
 
         if (Watchdog) {
@@ -1781,41 +1891,53 @@ int main(int argc, char **argv, char **envp) {
 
 //            modified input argv and run second time.
         cl::list<std::string> new_argv = InputArgv;
-        if (!firstTime) {
+        if (!concrete_run && !SymbolicOnly) {
             new_argv.clear();
             if (FileInput) {
-                char tmp = 65;
-                for (int i = 0; i < InputArgv.size(); i++) {
-                    std::string s(1, tmp);
-
-                    new_argv.addValue(s);
-                    tmp++;
-                }
-
-                new_argv.addValue("--sym-files");
-                new_argv.addValue(std::to_string(InputArgv.size()));
-
+                char tmpFile = 65;
+                int file_count = 0;
+                std::vector<int> file_size;
                 for (auto v: InputArgv) {
-                    std::ifstream file(v, std::ifstream::in | std::ifstream::binary);
-                    if(!file.is_open()) {
-                        std::cout << "Can not open file" << std::endl;
-                        exit(1);
+                    if (v.find("-") == 0) {
+                        new_argv.addValue(v);
                     }
-                    file.seekg(0, std::ios::end);
-                    int fileSize = file.tellg();
-                    file.close();
-
-                    new_argv.addValue(std::to_string(fileSize));
+                    else {
+                        file_count++;
+                        std::ifstream file(v, std::ifstream::in | std::ifstream::binary);
+                        if(!file.is_open()) {
+                            std::cout << "Can not open file" << std::endl;
+                            exit(1);
+                        }
+                        file.seekg(0, std::ios::end);
+                        int fileSize = file.tellg();
+                        file.close();
+                        file_size.push_back(fileSize);
+                    }
+                }
+                for (int i = 0; i < file_count; ++i) {
+                    std::string s(1, tmpFile);
+                    new_argv.addValue(s);
+                    tmpFile++;
+                }
+                new_argv.addValue("--sym-files");
+                new_argv.addValue(std::to_string(file_count));
+                for(int i = 0; i < file_size.size(); ++i) {
+                    new_argv.addValue(std::to_string(file_size[i]));
                 }
             } else {
                 for (auto v: InputArgv) {
-                    new_argv.addValue("--sym-arg");
-                    new_argv.addValue(std::to_string(v.length()));
+                    if (v.find("-") == 0) {
+                        new_argv.addValue(v);
+                    }
+                    else {
+                        new_argv.addValue("--sym-arg");
+                        new_argv.addValue(std::to_string(v.length()));
+                    }
                 }
             }
         }
         int second_pArgc;
-        second_pArgc = new_argv.size() + 1;
+--        second_pArgc = new_argv.size() + 1;
         char **second_pArgv;
         second_pArgv = new char *[second_pArgc];
 
@@ -1958,7 +2080,10 @@ int main(int argc, char **argv, char **envp) {
 
             post_port = PORT;
 
+            std::clock_t start = std::clock();
             interpreter->runFunctionAsMain(mainFn, second_pArgc, second_pArgv, pEnvp);
+            std::cout<< "Time consume: " << (std::clock() - start)/(double) CLOCKS_PER_SEC << std::endl;
+
 
             while (!seeds.empty()) {
                 kTest_free(seeds.back());
