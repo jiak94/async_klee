@@ -80,6 +80,7 @@ bool concrete_run;
 //std::queue<klee::InstructionInfo> instruction_info;
 char* post_url;
 int post_port;
+bool original_mode;
 
 namespace {
     cl::opt<std::string>
@@ -262,6 +263,16 @@ namespace {
             PathLogFile("path-log-file",
                 cl::desc("PathLog File"),
                 cl::init("-"));
+
+    cl::opt<int>
+            StdIn("std-in",
+                cl::desc("Make stdin symbolics"),
+                cl::init(0));
+
+    cl::opt<bool>
+            Original("multi-path-symbolic",
+                cl::desc("original klee mode"),
+                cl::init(false));
 }
 
 extern cl::opt<double> MaxTime;
@@ -464,6 +475,8 @@ void KleeHandler::updateGenerateTestcase() {
 void KleeHandler::processTestCase(const ExecutionState &state,
                                   const char *errorMessage,
                                   const char *errorSuffix) {
+
+    std::clock_t start = std::clock();
     if (errorMessage && OptExitOnError) {
         m_interpreter->prepareForEarlyExit();
         klee_error("EXITING ON ERROR:\n%s\n", errorMessage);
@@ -596,6 +609,12 @@ void KleeHandler::processTestCase(const ExecutionState &state,
             delete f;
         }
     }
+    std::clock_t time_consume = std::clock() - start;
+    std::ofstream time_log(getOutputFilename("time.log"), std::ios::out | std::ios::app);
+    if (time_log.is_open()) {
+        time_log << time_consume/(double) CLOCKS_PER_SEC << std::endl;
+    }
+    time_log.close();
 }
 
 // load a .path file
@@ -1227,16 +1246,6 @@ void parse_path_log(std::string file_path) {
 }
 
 int main(int argc, char **argv, char **envp) {
-    int fd[2 * NUM_PIPES];
-    int i = 0;
-    for (; i < NUM_PIPES; ++i) {
-        if (pipe(fd + (i * 2)) < 0) {
-            perror("Failed to allocate pipes");
-            exit(EXIT_FAILURE);
-        }
-
-    }
-
     parseArguments(argc, argv);
 
     if (GenPathLog && SymbolicOnly) {
@@ -1253,14 +1262,21 @@ int main(int argc, char **argv, char **envp) {
     async_mode = Async;
 
     pid_t second_round;
+    original_mode = Original.getValue();
 
-    if (!SymbolicOnly) {
+    if (!SymbolicOnly && !Original) {
         second_round = fork();
     }
-    else {
+    else if (SymbolicOnly) {
         second_round =  1;
         concrete_run = !SymbolicOnly;
         parse_path_log(PathLogFile.getValue());
+    }
+    else if (Original) {
+        second_round = 0;
+        concrete_run = false;
+        post_url = const_cast<char *>(URL.c_str());
+        post_port = PORT.getValue();
     }
 
 
@@ -1269,12 +1285,8 @@ int main(int argc, char **argv, char **envp) {
         atexit(llvm_shutdown);  // Call llvm_shutdown() on exit.
 
         llvm::InitializeNativeTarget();
-
-//
 //        parseArguments(argc, argv);
         sys::PrintStackTraceOnErrorSignal();
-//
-
 
         if (Watchdog) {
             if (MaxTime == 0) {
@@ -1568,7 +1580,7 @@ int main(int argc, char **argv, char **envp) {
                 }
             }
             //child process, do concrete here
-            concrete_run = true;
+            if (!original_mode) concrete_run = true;
             std::clock_t start = std::clock();
             interpreter->runFunctionAsMain(mainFn, pArgc, pArgv, pEnvp);
             std::cout<< "Time consume: " << (std::clock() - start)/(double) CLOCKS_PER_SEC << std::endl;
@@ -1716,7 +1728,6 @@ int main(int argc, char **argv, char **envp) {
         //parent process, do symbolic here.
         wait(NULL);
 
-        int count = 0;
         if (SymbolicOnly) {
             parse_path_log(PathLogFile);
         }
@@ -1724,9 +1735,6 @@ int main(int argc, char **argv, char **envp) {
             parse_path_log("/tmp/klee_path_log");
         }
 
-        int id, result;
-        std::cout << id_guide.size() << " " << switch_guide.size() << " "<<
-                  malloc_guide.size() << " " << memop_guide.size() << std::endl;
 
         concrete_run = false;
         atexit(llvm_shutdown);  // Call llvm_shutdown() on exit.
@@ -1924,7 +1932,16 @@ int main(int argc, char **argv, char **envp) {
                 for(int i = 0; i < file_size.size(); ++i) {
                     new_argv.addValue(std::to_string(file_size[i]));
                 }
-            } else {
+            }
+            else if(StdIn) {
+                for (auto v: InputArgv) {
+                    if (v.find("-") == 0) {
+                        new_argv.addValue(v);
+                    }
+                }
+                new_argv.addValue("--sym-stdin " + std::to_string(StdIn.getValue()));
+            }
+            else {
                 for (auto v: InputArgv) {
                     if (v.find("-") == 0) {
                         new_argv.addValue(v);
@@ -1937,7 +1954,7 @@ int main(int argc, char **argv, char **envp) {
             }
         }
         int second_pArgc;
---        second_pArgc = new_argv.size() + 1;
+        second_pArgc = new_argv.size() + 1;
         char **second_pArgv;
         second_pArgv = new char *[second_pArgc];
 
@@ -2078,7 +2095,7 @@ int main(int argc, char **argv, char **envp) {
 
             post_url = const_cast<char *>(URL.c_str());
 
-            post_port = PORT;
+            post_port = PORT.getValue();
 
             std::clock_t start = std::clock();
             interpreter->runFunctionAsMain(mainFn, second_pArgc, second_pArgv, pEnvp);

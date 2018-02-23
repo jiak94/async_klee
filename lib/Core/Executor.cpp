@@ -720,11 +720,13 @@ void Executor::branch(ExecutionState &state,
             ExecutionState *ns = es->branch();
             addedStates.push_back(ns);
             result.push_back(ns);
-//            es->ptreeNode->data = 0;
-//            std::pair<PTree::Node *, PTree::Node *> res =
-//                    processTree->split(es->ptreeNode, ns, es);
-//            ns->ptreeNode = res.first;
-//            es->ptreeNode = res.second;
+            if (original_mode) {
+                es->ptreeNode->data = 0;
+                std::pair<PTree::Node *, PTree::Node *> res =
+                processTree->split(es->ptreeNode, ns, es);
+                ns->ptreeNode = res.first;
+                es->ptreeNode = res.second;
+            }
         }
     }
 
@@ -824,17 +826,11 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
         timeout *= it->second.size();
     solver->setTimeout(timeout);
     bool success;
+//    llvm::raw_ostream *out = &llvm::outs();
+//    Query q = Query(current.constraints, condition);
+//    ExprPPrinter::printQuery(*out, q.constraints, q.expr, 0, 0, 0, 0);
     success = solver->evaluate(current, condition, res);
 
-    if (!concrete_run &&
-            current_ki->info->file.find("klee/runtime") == std::string::npos) {
-        std::ofstream ofile("/tmp/sym-path", std::ios::app);
-        if (ofile.is_open()) {
-            ofile << current_ki->info->id << "\t" << res
-                  << "\t" << current_ki->info->file << current_ki->info->line<< "\n";
-        }
-        ofile.close();
-    }
     solver->setTimeout(0);
     if (!success) {
         current.pc = current.prevPC;
@@ -938,7 +934,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
         }
 
         if (!concrete_run &&
-            current_ki->info->file.find("klee/runtime") == std::string::npos) {
+            current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
 
             std::pair<int, int> foo = id_guide.front();
 
@@ -953,7 +949,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
             }
         }
 
-        if (concrete_run && current_ki->info->file.find("klee/runtime") == std::string::npos) {
+        if (concrete_run && current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
             std::pair<int, int> tmp;
             tmp = std::make_pair(current_ki->info->id, res);
             id_guide.push(tmp);
@@ -970,7 +966,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
             }
         }
         if (!concrete_run &&
-            current_ki->info->file.find("klee/runtime") == std::string::npos) {
+            current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
             std::pair<int, int> foo = id_guide.front();
 
 
@@ -982,7 +978,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
             }
         }
 
-        if (concrete_run && current_ki->info->file.find("klee/runtime") == std::string::npos) {
+        if (concrete_run && current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
             std::pair<int, int> tmp;
             tmp = std::make_pair(current_ki->info->id, res);
             id_guide.push(tmp);
@@ -991,7 +987,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
         prev_ki = current_ki;
         return StatePair(0, &current);
     } else {
-        if (!concrete_run && !id_guide.empty() &&
+        if (!concrete_run && !original_mode && !id_guide.empty() &&
             current_ki->info->file.find("klee/runtime") == std::string::npos) {
             std::pair<unsigned int, int> foo = id_guide.front();
             id_guide.pop();
@@ -1010,30 +1006,31 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                     addConstraint(current, Expr::createIsZero(condition));
                     addConstraint(*falseState, condition);
 
-                    std::string str;
-                    llvm::raw_string_ostream query_log(str);
-                    std::vector<const Array *> objects;
-
-                    for (unsigned i = 0; i != falseState->symbolics.size(); ++i){
-                        if (falseState->symbolics[i].first->name.find("model_version") == std::string::npos &&
-                            falseState->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
-                            objects.push_back(falseState->symbolics[i].second);
-                        }
-                    }
-
-
-                    const Array* const *evalArraysBegin = 0;
-                    const Array* const *evalArraysEnd = 0;
-
-                    if ((0 != &objects) && (false == objects.empty())) {
-                        evalArraysBegin = &((objects)[0]);
-                        evalArraysEnd = &((objects)[0]) + objects.size();
-                    }
                     if (async_mode) {
-                        Query q = Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
-                        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin,
+                        std::string str;
+                        llvm::raw_string_ostream *query_log = new llvm::raw_string_ostream(str);
+                        std::vector<const Array *> objects;
+                        for (unsigned i = 0; i != falseState->symbolics.size(); ++i){
+                            if (falseState->symbolics[i].first->name.find("model_version") == std::string::npos &&
+                                falseState->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                                objects.push_back(falseState->symbolics[i].second);
+                            }
+                        }
+
+
+                        const Array* const *evalArraysBegin = 0;
+                        const Array* const *evalArraysEnd = 0;
+
+                        if ((0 != &objects) && (false == objects.empty())) {
+                            evalArraysBegin = &((objects)[0]);
+                            evalArraysEnd = &((objects)[0]) + objects.size();
+                        }
+                        Query *q = new Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
+                        ExprPPrinter::printQuery(*query_log, q->constraints, q->expr, 0, 0, evalArraysBegin,
                                                  evalArraysEnd);
-                        post_data(query_log.str());
+                        post_data(query_log->str());
+                        delete q;
+                        delete query_log;
                     }
                     else {
                         interpreterHandler->processTestCase(*falseState, 0, 0);
@@ -1049,29 +1046,31 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
 
                     addConstraint(*falseState, Expr::createIsZero(condition));
 
-                    std::string str;
-                    llvm::raw_string_ostream query_log(str);
-                    std::vector<const Array *> objects;
-
-                    for (unsigned i = 0; i != falseState->symbolics.size(); ++i){
-                        if (falseState->symbolics[i].first->name.find("model_version") == std::string::npos &&
-                            falseState->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
-                            objects.push_back(falseState->symbolics[i].second);
-                        }
-                    }
-
-                    const Array* const *evalArraysBegin = 0;
-                    const Array* const *evalArraysEnd = 0;
-
-                    if ((0 != &objects) && (false == objects.empty())) {
-                        evalArraysBegin = &((objects)[0]);
-                        evalArraysEnd = &((objects)[0]) + objects.size();
-                    }
                     if (async_mode) {
-                        Query q = Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
-                        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin,
+                        std::string str;
+                        llvm::raw_string_ostream *query_log = new llvm::raw_string_ostream(str);
+                        std::vector<const Array *> objects;
+                        for (unsigned i = 0; i != falseState->symbolics.size(); ++i){
+                            if (falseState->symbolics[i].first->name.find("model_version") == std::string::npos &&
+                                falseState->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                                objects.push_back(falseState->symbolics[i].second);
+                            }
+                        }
+
+
+                        const Array* const *evalArraysBegin = 0;
+                        const Array* const *evalArraysEnd = 0;
+
+                        if ((0 != &objects) && (false == objects.empty())) {
+                            evalArraysBegin = &((objects)[0]);
+                            evalArraysEnd = &((objects)[0]) + objects.size();
+                        }
+                        Query *q = new Query(falseState->constraints, ConstantExpr::alloc(0, Expr::Bool));
+                        ExprPPrinter::printQuery(*query_log, q->constraints, q->expr, 0, 0, evalArraysBegin,
                                                  evalArraysEnd);
-                        post_data(query_log.str());
+                        post_data(query_log->str());
+                        delete q;
+                        delete query_log;
                     }
                     else {
                         interpreterHandler->processTestCase(*falseState, 0, 0);
@@ -1090,7 +1089,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
 
         // TODO:
         // The posix path haven't been travel by concrete, what should return?
-        if (current_ki->info->file.find("klee/runtime")) {
+        if (current_ki->info->file.find("klee/runtime") && !original_mode) {
 //            std::cout << "posix runtime" << std::endl;
             return StatePair(0, 0);
 //            exit(1);
@@ -1753,7 +1752,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                     tmp = std::make_pair(current_ki->info->id, index);
                     switch_guide.push(tmp);
 
-                } else if (!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos) {
+                } else if (!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
                     std::pair<int, int> tmp = id_guide.front();
                     if (tmp.first  == ki->info->id) {
                         switch_guide.pop();
@@ -1761,7 +1760,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                     }
                 }
             }
-            else if(!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos) {
+            else if(!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
                 //add constraints? probably?
                 //Todo:
                 //retrieve sucessor index from guide, then replace the following index into successor index.
@@ -1870,48 +1869,41 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 std::vector<ExecutionState *> branches;
                 branch(state, conditions, branches);
 
-//                std::vector<ExecutionState *>::iterator bit = branches.begin();
-//                for (std::vector<BasicBlock *>::iterator it = bbOrder.begin(),
-//                             ie = bbOrder.end();
-//                     it != ie; ++it) {
-//                    ExecutionState *es = *bit;
-//                    if (es)
-//                        transferToBasicBlock(*it, bb, *es);
-//                    ++bit;
-//                }
-
                 for (int i = 1; i < branches.size(); ++i) {
                     ExecutionState *es = branches[i];
-                    std::string str;
-                    llvm::raw_string_ostream query_log(str);
-                    std::vector<const Array *> objects;
 
-                    for (unsigned i = 0; i != es->symbolics.size(); ++i){
-                        if (es->symbolics[i].first->name.find("model_version") == std::string::npos &&
-                            es->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
-                            objects.push_back(es->symbolics[i].second);
-                        }
-                    }
-
-
-                    const Array* const *evalArraysBegin = 0;
-                    const Array* const *evalArraysEnd = 0;
-
-                    if ((0 != &objects) && (false == objects.empty())) {
-                        evalArraysBegin = &((objects)[0]);
-                        evalArraysEnd = &((objects)[0]) + objects.size();
-                    }
                     if (async_mode) {
-                        Query q = Query(es->constraints, ConstantExpr::alloc(0, Expr::Bool));
-                        ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin,
+                        std::string str;
+                        llvm::raw_string_ostream *query_log = new llvm::raw_string_ostream(str);
+                        std::vector<const Array *> objects;
+
+                        for (unsigned i = 0; i != es->symbolics.size(); ++i){
+                            if (es->symbolics[i].first->name.find("model_version") == std::string::npos &&
+                                es->symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                                objects.push_back(es->symbolics[i].second);
+                            }
+                        }
+
+
+                        const Array* const *evalArraysBegin = 0;
+                        const Array* const *evalArraysEnd = 0;
+
+                        if ((0 != &objects) && (false == objects.empty())) {
+                            evalArraysBegin = &((objects)[0]);
+                            evalArraysEnd = &((objects)[0]) + objects.size();
+                        }
+                        Query *q = new Query(es->constraints, ConstantExpr::alloc(0, Expr::Bool));
+                        ExprPPrinter::printQuery(*query_log, q->constraints, q->expr, 0, 0, evalArraysBegin,
                                                  evalArraysEnd);
-                        post_data(query_log.str());
+                        post_data(query_log->str());
+                        delete query_log;
+                        delete q;
+
                     }
                     else {
                         interpreterHandler->processTestCase(*es, 0, 0);
                     }
                 }
-//                addedStates.clear();
             }
             else
             {
@@ -2833,7 +2825,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 }
 
 void Executor::updateStates(ExecutionState *current) {
-    if (!addedStates.empty()) {
+    if (!addedStates.empty() && !original_mode) {
         std::cout << "state not empty" << std::endl;
         addedStates.clear();
     }
@@ -3182,44 +3174,63 @@ void Executor::terminateState(ExecutionState &state) {
         processTree->remove(state.ptreeNode);
         delete &state;
     }
+    if (original_mode) {
+        while(!id_guide.empty()) {
+            id_guide.pop();
+        }
+        while (!malloc_guide.empty()) {
+            malloc_guide.pop();
+        }
+        while (!switch_guide.empty()) {
+            switch_guide.pop();
+        }
+        while (!memop_guide.empty()) {
+            memop_guide.pop();
+        }
+    }
 }
 
 void Executor::terminateStateEarly(ExecutionState &state,
                                    const Twine &message) {
-    if (!OnlyOutputStatesCoveringNew || state.coveredNew ||
-        (AlwaysOutputSeeds && seedMap.count(&state))){}
-//        interpreterHandler->processTestCase(state, (message + "\n").str().c_str(),
-//                                            "early");
     if (!concrete_run) {
-        std::string str;
-        llvm::raw_string_ostream query_log(str);
-        std::vector<const Array *> objects;
-
-        for (unsigned i = 0; i != state.symbolics.size(); ++i){
-            if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
-                    state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
-                objects.push_back(state.symbolics[i].second);
-            }
-        }
-
-
-        const Array *const *evalArraysBegin = 0;
-        const Array *const *evalArraysEnd = 0;
-
-        if ((0 != &objects) && (false == objects.empty())) {
-            evalArraysBegin = &((objects)[0]);
-            evalArraysEnd = &((objects)[0]) + objects.size();
-        }
         if (async_mode) {
-            Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
+            std::string str;
+            llvm::raw_string_ostream *query_log = new llvm::raw_string_ostream(str);
+            std::vector<const Array *> objects;
+
+            for (unsigned i = 0; i != state.symbolics.size(); ++i){
+                if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
+                    state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                    objects.push_back(state.symbolics[i].second);
+                }
+            }
 
 
-            ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-            post_data(query_log.str());
+            const Array *const *evalArraysBegin = 0;
+            const Array *const *evalArraysEnd = 0;
+
+            if ((0 != &objects) && (false == objects.empty())) {
+                evalArraysBegin = &((objects)[0]);
+                evalArraysEnd = &((objects)[0]) + objects.size();
+            }
+            Query *q = new Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
+            ExprPPrinter::printQuery(*query_log, q->constraints, q->expr, 0, 0, evalArraysBegin, evalArraysEnd);
+            post_data(query_log->str());
+            delete query_log;
+            delete q;
         }
         else {
-            interpreterHandler->processTestCase(state, 0, 0);
+            if (!OnlyOutputStatesCoveringNew || state.coveredNew ||
+                (AlwaysOutputSeeds && seedMap.count(&state)))
+                interpreterHandler->processTestCase(state, (message + "\n").str().c_str(),
+                                                    "early");
         }
+    }
+    else {
+        if (!OnlyOutputStatesCoveringNew || state.coveredNew ||
+            (AlwaysOutputSeeds && seedMap.count(&state)))
+            interpreterHandler->processTestCase(state, (message + "\n").str().c_str(),
+                                                "early");
     }
     terminateState(state);
 }
@@ -3230,30 +3241,30 @@ void Executor::terminateStateOnExit(ExecutionState &state) {
 //        interpreterHandler->processTestCase(state, 0, 0);
     }
     if (!concrete_run) {
-        std::string str;
-        llvm::raw_string_ostream query_log(str);
-        std::vector<const Array *> objects;
-
-        for (unsigned i = 0; i != state.symbolics.size(); ++i){
-            if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
-                state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
-                objects.push_back(state.symbolics[i].second);
-            }
-        }
-
-        const Array *const *evalArraysBegin = 0;
-        const Array *const *evalArraysEnd = 0;
-
-        if ((0 != &objects) && (false == objects.empty())) {
-            evalArraysBegin = &((objects)[0]);
-            evalArraysEnd = &((objects)[0]) + objects.size();
-        }
         if (async_mode) {
-            Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
+            std::string str;
+            llvm::raw_string_ostream *query_log = new llvm::raw_string_ostream(str);
+            std::vector<const Array *> objects;
 
+            for (unsigned i = 0; i != state.symbolics.size(); ++i){
+                if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
+                    state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                    objects.push_back(state.symbolics[i].second);
+                }
+            }
 
-            ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-            post_data(query_log.str());
+            const Array *const *evalArraysBegin = 0;
+            const Array *const *evalArraysEnd = 0;
+
+            if ((0 != &objects) && (false == objects.empty())) {
+                evalArraysBegin = &((objects)[0]);
+                evalArraysEnd = &((objects)[0]) + objects.size();
+            }
+            Query *q = new Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
+            ExprPPrinter::printQuery(*query_log, q->constraints, q->expr, 0, 0, evalArraysBegin, evalArraysEnd);
+            post_data(query_log->str());
+            delete query_log;
+            delete q;
         }
         else {
             interpreterHandler->processTestCase(state, 0, 0);
@@ -3358,38 +3369,37 @@ void Executor::terminateStateOnError(ExecutionState &state,
             suffix = suffix_buf.c_str();
         }
 
-//        interpreterHandler->processTestCase(state, msg.str().c_str(), suffix);
-    }
-    if (!concrete_run) {
-        std::string str;
-        llvm::raw_string_ostream query_log(str);
-        std::vector<const Array *> objects;
+        if (!concrete_run) {
+            if (async_mode) {
+                std::string str;
+                llvm::raw_string_ostream *query_log = new llvm::raw_string_ostream(str);
+                std::vector<const Array *> objects;
 
-        for (unsigned i = 0; i != state.symbolics.size(); ++i){
-            if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
-                state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
-                objects.push_back(state.symbolics[i].second);
+                for (unsigned i = 0; i != state.symbolics.size(); ++i){
+                    if (state.symbolics[i].first->name.find("model_version") == std::string::npos &&
+                        state.symbolics[i].first->name.find("-data-stat") == std::string::npos) {
+                        objects.push_back(state.symbolics[i].second);
+                    }
+                }
+
+                const Array *const *evalArraysBegin = 0;
+                const Array *const *evalArraysEnd = 0;
+
+                if ((0 != &objects) && (false == objects.empty())) {
+                    evalArraysBegin = &((objects)[0]);
+                    evalArraysEnd = &((objects)[0]) + objects.size();
+                }
+                Query *q = new Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
+                ExprPPrinter::printQuery(*query_log, q->constraints, q->expr, 0, 0, evalArraysBegin, evalArraysEnd);
+                post_data(query_log->str());
+                delete query_log;
+            }
+            else {
+                interpreterHandler->processTestCase(state, msg.str().c_str(), suffix);
             }
         }
-
-        const Array *const *evalArraysBegin = 0;
-        const Array *const *evalArraysEnd = 0;
-
-        if ((0 != &objects) && (false == objects.empty())) {
-            evalArraysBegin = &((objects)[0]);
-            evalArraysEnd = &((objects)[0]) + objects.size();
-        }
-        if (async_mode) {
-            Query q = Query(state.constraints, ConstantExpr::alloc(0, Expr::Bool));
-
-
-            ExprPPrinter::printQuery(query_log, q.constraints, q.expr, 0, 0, evalArraysBegin, evalArraysEnd);
-            post_data(query_log.str());
-        }
-        else {
-            interpreterHandler->processTestCase(state, 0, 0);
-        }
     }
+
     terminateState(state);
 
     if (shouldExitOn(termReason))
@@ -3592,13 +3602,13 @@ void Executor::executeAlloc(ExecutionState &state,
         // TODO:
         // Need to think about how to add constraints.
         std::pair<int, int> foo = malloc_guide.front();
-        while (!malloc_guide.empty() && foo.first !=  current_ki->info->id) {
+        while (!malloc_guide.empty() && foo.first !=  current_ki->info->id && !original_mode) {
             malloc_guide.pop();
             pop_count++;
             foo = malloc_guide.front();
         }
         if (current_ki->info->id == foo.first) {
-            std::cout << foo.second << std::endl;
+            //std::cout << foo.second << std::endl;
             malloc_guide.pop();
             pop_count++;
 
@@ -3628,7 +3638,7 @@ void Executor::executeAlloc(ExecutionState &state,
             }
             return;
         }
-        else {
+        else if (!original_mode){
             perror("malloc error");
             exit(1);
         }
@@ -3824,7 +3834,7 @@ void Executor::executeMemoryOperation(ExecutionState &state,
             terminateStateEarly(state, "Query timed out (bounds check).");
             return;
         }
-        if (!inBounds && current_ki->info->file.find("klee/runtime") == std::string::npos) {
+        if (!inBounds && current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
             std::pair<int, int> foo = memop_guide.front();
             while(!memop_guide.empty() && current_ki->info->id != foo.first) {
                 memop_guide.pop();
@@ -3840,11 +3850,13 @@ void Executor::executeMemoryOperation(ExecutionState &state,
                 offset = builder->Constant(apInt);
             }
         }
+        if (!original_mode && !inBounds) {
+            solver->setTimeout(coreSolverTimeout);
+            success = solver->mustBeTrue(state,
+                                         mo->getBoundsCheckOffset(offset, bytes),
+                                         inBounds);
+        }
 
-        solver->setTimeout(coreSolverTimeout);
-        success = solver->mustBeTrue(state,
-                                          mo->getBoundsCheckOffset(offset, bytes),
-                                          inBounds);
         if (!success) {
             state.pc = state.prevPC;
             terminateStateEarly(state, "Query timed out (bounds check).");
@@ -4326,12 +4338,11 @@ size_t Executor::getAllocationAlignment(const llvm::Value *allocSite) const {
 }
 
 void Executor::prepareForEarlyExit() {
-    if (statsTracker) {
+    if (false) {
         // Make sure stats get flushed out
         statsTracker->done();
     }
 }
-///
 
 Interpreter *Interpreter::create(LLVMContext &ctx, const InterpreterOptions &opts,
                                  InterpreterHandler *ih) {
@@ -4359,7 +4370,7 @@ void Executor::post_data(std::string data) {
         curl_easy_setopt(curl, CURLOPT_URL, post_url);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, message);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)strlen(message));
-        curl_easy_setopt(curl, CURLOPT_PORT, 5000);
+        curl_easy_setopt(curl, CURLOPT_PORT, post_port);
         res = curl_easy_perform(curl);
         if (res != CURLE_OK) {
             perror("send query fail");
@@ -4367,5 +4378,7 @@ void Executor::post_data(std::string data) {
         if (res == CURLE_OK)
             interpreterHandler->updateGenerateTestcase();
     }
+
+    curl_easy_cleanup(curl);
     curl_global_cleanup();
 }

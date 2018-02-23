@@ -30,4 +30,5 @@ extern char* post_url;
 extern int post_port;
 extern std::queue<klee::InstructionInfo> instruction_info;
 extern bool async_mode;
+extern bool original_mode;
 #endif //KLEE_GLOBAL_H
