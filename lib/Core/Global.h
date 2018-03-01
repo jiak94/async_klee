@@ -19,9 +19,9 @@
 #define KLEE_GLOBAL_H
 
 extern std::queue<std::pair<unsigned int, int>> id_guide;
-extern std::queue<std::pair<int, int>> switch_guide;
-extern std::queue<std::pair<int, int>> malloc_guide;
-extern std::queue<std::pair<int, int>> memop_guide;
+extern std::queue<std::pair<unsigned int, unsigned int>> switch_guide;
+extern std::queue<std::pair<unsigned int, unsigned int>> malloc_guide;
+extern std::queue<std::pair<unsigned int, unsigned int>> memop_guide;
 extern klee::KInstruction* current_ki;
 extern klee::KInstruction* prev_ki;
 extern bool concrete_run;
