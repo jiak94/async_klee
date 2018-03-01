@@ -631,6 +631,7 @@ void KleeHandler::loadPathFile(std::string name,
         buffer.push_back(!!value);
         f.get();
     }
+    f.close();
 }
 
 void KleeHandler::getKTestFilesInDir(std::string directoryPath,
@@ -1708,6 +1709,8 @@ int main(int argc, char **argv, char **envp) {
               << handler->getNumPathsExplored() << "\n";
         stats << "KLEE: done: generated tests = "
               << handler->getNumTestCases() << "\n";
+        stats << "query cex cache hits = "
+              << *theStatisticManager->getStatisticByName("QueryCexCacheHits") << "\n";
 
         bool useColors = llvm::errs().is_displayed();
         if (useColors)
@@ -1929,7 +1932,7 @@ int main(int argc, char **argv, char **envp) {
                 }
                 new_argv.addValue("--sym-files");
                 new_argv.addValue(std::to_string(file_count));
-                for(int i = 0; i < file_size.size(); ++i) {
+                for(unsigned int i = 0; i < file_size.size(); ++i) {
                     new_argv.addValue(std::to_string(file_size[i]));
                 }
             }
@@ -2162,6 +2165,8 @@ int main(int argc, char **argv, char **envp) {
               << handler->getNumPathsExplored() << "\n";
         stats << "KLEE: done: generated tests = "
               << handler->getNumTestCases() << "\n";
+        stats << "query cex cache hits = "
+                << *theStatisticManager->getStatisticByName("QueryCexCacheHits") << "\n";
 
         bool useColors = llvm::errs().is_displayed();
         if (useColors)
