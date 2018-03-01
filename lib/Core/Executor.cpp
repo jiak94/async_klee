@@ -111,9 +111,9 @@ using namespace klee;
 klee::KInstruction *current_ki;
 klee::KInstruction *prev_ki;
 std::queue<std::pair<unsigned int, int>> id_guide;
-std::queue<std::pair<int, int>> switch_guide;
-std::queue<std::pair<int, int>> malloc_guide;
-std::queue<std::pair<int, int>> memop_guide;
+std::queue<std::pair<unsigned int, unsigned int>> switch_guide;
+std::queue<std::pair<unsigned int, unsigned int>> malloc_guide;
+std::queue<std::pair<unsigned int, unsigned int>> memop_guide;
 std::queue<klee::InstructionInfo> instruction_info;
 int pop_count;
 bool async_mode;
@@ -936,7 +936,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
         if (!concrete_run &&
             current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
 
-            std::pair<int, int> foo = id_guide.front();
+            std::pair<unsigned int, int> foo = id_guide.front();
 
             if (current_ki->info->id != foo.first || res != foo.second) {
                 // posix runtime uses some libc function
@@ -967,7 +967,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
         }
         if (!concrete_run &&
             current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
-            std::pair<int, int> foo = id_guide.front();
+            std::pair<unsigned int, int> foo = id_guide.front();
 
 
             if (current_ki->info->id != foo.first || res != foo.second) {
@@ -987,6 +987,14 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
         prev_ki = current_ki;
         return StatePair(0, &current);
     } else {
+        std::cout << "Fork at: " << current_ki << " assembly line: " << current_ki->info->assemblyLine << "\n";
+        std::cout << "generate constratin: " << "\n";
+        llvm::raw_ostream *out = &llvm::outs();
+        std::cout << "Positive: " << "\n";
+        ExprPPrinter::printSingleExpr(*out, condition);
+        std::cout << "\nNegative: " << "\n";
+        ExprPPrinter::printSingleExpr(*out, Expr::createIsZero(condition));
+        std::cout << std::endl;
         if (!concrete_run && !original_mode && !id_guide.empty() &&
             current_ki->info->file.find("klee/runtime") == std::string::npos) {
             std::pair<unsigned int, int> foo = id_guide.front();
@@ -1021,7 +1029,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                         const Array* const *evalArraysBegin = 0;
                         const Array* const *evalArraysEnd = 0;
 
-                        if ((0 != &objects) && (false == objects.empty())) {
+                        if (!objects.empty()) {
                             evalArraysBegin = &((objects)[0]);
                             evalArraysEnd = &((objects)[0]) + objects.size();
                         }
@@ -1061,7 +1069,7 @@ Executor::fork(ExecutionState &current, ref<Expr> condition, bool isInternal) {
                         const Array* const *evalArraysBegin = 0;
                         const Array* const *evalArraysEnd = 0;
 
-                        if ((0 != &objects) && (false == objects.empty())) {
+                        if (!objects.empty()) {
                             evalArraysBegin = &((objects)[0]);
                             evalArraysEnd = &((objects)[0]) + objects.size();
                         }
@@ -1748,12 +1756,12 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 transferToBasicBlock(si->getSuccessor(index), si->getParent(), state);
 
                 if (concrete_run && ki->info->file.find("klee/runtime") == std::string::npos) {
-                    std::pair<int, int> tmp;
+                    std::pair<unsigned int, unsigned int> tmp;
                     tmp = std::make_pair(current_ki->info->id, index);
                     switch_guide.push(tmp);
 
                 } else if (!concrete_run && ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
-                    std::pair<int, int> tmp = id_guide.front();
+                    std::pair<unsigned int, int> tmp = id_guide.front();
                     if (tmp.first  == ki->info->id) {
                         switch_guide.pop();
                         pop_count++;
@@ -1765,7 +1773,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 //Todo:
                 //retrieve sucessor index from guide, then replace the following index into successor index.
                 unsigned index;
-                std::pair<int, int> tmp;
+                std::pair<unsigned int, unsigned int> tmp;
                 tmp = switch_guide.front();
                 switch_guide.pop();
                 pop_count++;
@@ -1869,7 +1877,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                 std::vector<ExecutionState *> branches;
                 branch(state, conditions, branches);
 
-                for (int i = 1; i < branches.size(); ++i) {
+                for (unsigned int i = 1; i < branches.size(); ++i) {
                     ExecutionState *es = branches[i];
 
                     if (async_mode) {
@@ -1888,7 +1896,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
                         const Array* const *evalArraysBegin = 0;
                         const Array* const *evalArraysEnd = 0;
 
-                        if ((0 != &objects) && (false == objects.empty())) {
+                        if (!objects.empty()) {
                             evalArraysBegin = &((objects)[0]);
                             evalArraysEnd = &((objects)[0]) + objects.size();
                         }
@@ -3060,13 +3068,6 @@ void Executor::run(ExecutionState &initialState) {
 
         checkMemoryUsage();
 
-        for (std::vector<ExecutionState *>::iterator it = removedStates.begin(),
-                     ie = removedStates.end();
-             it != ie; ++it) {
-            ExecutionState *es = *it;
-            printf("instruction_cout: %d\n", es->instruction_count);
-        }
-
         updateStates(&state);
     }
 
@@ -3209,7 +3210,7 @@ void Executor::terminateStateEarly(ExecutionState &state,
             const Array *const *evalArraysBegin = 0;
             const Array *const *evalArraysEnd = 0;
 
-            if ((0 != &objects) && (false == objects.empty())) {
+            if (!objects.empty()) {
                 evalArraysBegin = &((objects)[0]);
                 evalArraysEnd = &((objects)[0]) + objects.size();
             }
@@ -3256,7 +3257,7 @@ void Executor::terminateStateOnExit(ExecutionState &state) {
             const Array *const *evalArraysBegin = 0;
             const Array *const *evalArraysEnd = 0;
 
-            if ((0 != &objects) && (false == objects.empty())) {
+            if (!objects.empty()) {
                 evalArraysBegin = &((objects)[0]);
                 evalArraysEnd = &((objects)[0]) + objects.size();
             }
@@ -3385,7 +3386,7 @@ void Executor::terminateStateOnError(ExecutionState &state,
                 const Array *const *evalArraysBegin = 0;
                 const Array *const *evalArraysEnd = 0;
 
-                if ((0 != &objects) && (false == objects.empty())) {
+                if (!objects.empty()) {
                     evalArraysBegin = &((objects)[0]);
                     evalArraysEnd = &((objects)[0]) + objects.size();
                 }
@@ -3565,11 +3566,11 @@ void Executor::executeAlloc(ExecutionState &state,
 
         if (concrete_run &&
                 current_ki->info->file.find("klee/runtime") == std::string::npos) {
-            std::pair<int, int> foo = std::make_pair(current_ki->info->id, CE->getZExtValue());
+            std::pair<unsigned int, unsigned int> foo = std::make_pair(current_ki->info->id, CE->getZExtValue());
             malloc_guide.push(foo);
         }
         else if(current_ki->info->file.find("klee/runtime") == std::string::npos) {
-            std::pair<int, int> foo = malloc_guide.front();
+            std::pair<unsigned int, unsigned int> foo = malloc_guide.front();
             if (foo.first == current_ki->info->id) {
                 malloc_guide.pop();
             }
@@ -3601,7 +3602,7 @@ void Executor::executeAlloc(ExecutionState &state,
     } else {
         // TODO:
         // Need to think about how to add constraints.
-        std::pair<int, int> foo = malloc_guide.front();
+        std::pair<unsigned int, unsigned int> foo = malloc_guide.front();
         while (!malloc_guide.empty() && foo.first !=  current_ki->info->id && !original_mode) {
             malloc_guide.pop();
             pop_count++;
@@ -3835,7 +3836,7 @@ void Executor::executeMemoryOperation(ExecutionState &state,
             return;
         }
         if (!inBounds && current_ki->info->file.find("klee/runtime") == std::string::npos && !original_mode) {
-            std::pair<int, int> foo = memop_guide.front();
+            std::pair<unsigned int, unsigned int> foo = memop_guide.front();
             while(!memop_guide.empty() && current_ki->info->id != foo.first) {
                 memop_guide.pop();
                 pop_count++;
