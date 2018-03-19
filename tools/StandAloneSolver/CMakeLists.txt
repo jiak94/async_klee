@@ -6,10 +6,14 @@
 # License. See LICENSE.TXT for details.
 #
 #===------------------------------------------------------------------------===#
-add_subdirectory(gen-random-bout)
-add_subdirectory(kleaver)
-add_subdirectory(klee)
-add_subdirectory(klee-replay)
-add_subdirectory(klee-stats)
-add_subdirectory(ktest-tool)
-add_subdirectory(StandAloneSolver)
+add_executable(standalone
+  main.cpp
+)
+
+set(KLEE_LIBS
+  kleaverSolver
+)
+
+target_link_libraries(standalone ${KLEE_LIBS})
+
+install(TARGETS standalone RUNTIME DESTINATION bin)
