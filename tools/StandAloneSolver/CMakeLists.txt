@@ -8,7 +8,7 @@
 #===------------------------------------------------------------------------===#
 add_executable(standalone
   main.cpp
-)
+       SharedQueue.h)
 
 set(KLEE_LIBS
   kleaverSolver

@@ -27,10 +27,13 @@
 #include <iostream>
 #include <fstream>
 #include <csignal>
-
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 #include "llvm/Support/Signals.h"
 #include "../../lib/Core/TimingSolver.h"
+#include "SharedQueue.h"
 
 #if LLVM_VERSION_CODE < LLVM_VERSION(3, 5)
 #include "llvm/ADT/OwningPtr.h"
@@ -67,18 +70,6 @@ static llvm::cl::opt<BuilderKinds>
                             clEnumValN(SimplifyingBuilder, "simplify",
                                        "Fold constants and simplify expressions.")KLEE_LLVM_CL_VAL_END));
 
-void writeResult(std::vector<std::vector<unsigned char> > &result, QueryCommand *QC, const char *filename) {
-
-    for (unsigned i = 0, e = result.size(); i != e; ++i) {
-        std::string outfile = std::string(filename) + "_" + QC->Objects[i]->name + "_replay";
-        std::ofstream out;
-        out.open(outfile, std::ios::out);
-        for (unsigned j = 0; j != QC->Objects[i]->size; ++j) {
-            out << (char)result[i][j];
-        }
-        out.close();
-    }
-}
 
 class Solution {
 private:
@@ -87,6 +78,7 @@ private:
     ExprBuilder *builder;
     Parser *parser = NULL;
     BuilderKinds kinds;
+    void writeResult(std::vector<std::vector<unsigned char> > &result, QueryCommand *QC, const char *filename);
 
 public:
     Solution(BuilderKinds kind);
@@ -120,7 +112,7 @@ bool Solution::parse(std::string Filename, MemoryBuffer *MB, std::vector<Decl *>
         parser = Parser::Create(Filename, MB, builder, false);
     }
     else {
-        parser->updateParserImpl(Filename, MB, false);
+        parser->updateParserImpl(Filename, MB, builder);
     }
 //    parser = Parser::Create(Filename, MB, builder, false);
 //    parser->update(Filename, MB, builder);
@@ -145,7 +137,7 @@ void Solution::computeInitialValue(std::vector<Decl *> decls, std::string Filena
             std::vector<std::vector<unsigned char> > result;
             if (solver->getInitialValues(Query(ConstraintManager(QC->Constraints), QC->Query),
                                          QC->Objects, result)) {
-                writeResult(result, QC, Filename.c_str());
+                this->writeResult(result, QC, Filename.c_str());
             }
         }
     }
@@ -165,10 +157,21 @@ void Solution::computeInitialValue(std::vector<Decl *> decls, std::string Filena
                     << *theStatisticManager->getStatisticByName("QueryCexCacheHits") << "\n";
         }
         llvm::outs() << "\n";
-//    delete(parser);
-
-
 }
+
+void Solution::writeResult(std::vector<std::vector<unsigned char> > &result, QueryCommand *QC, const char *filename) {
+
+    for (unsigned i = 0, e = result.size(); i != e; ++i) {
+        std::string outfile = std::string(filename) + "_" + QC->Objects[i]->name + "_replay";
+        std::ofstream out;
+        out.open(outfile, std::ios::out);
+        for (unsigned j = 0; j != QC->Objects[i]->size; ++j) {
+            out << (char)result[i][j];
+        }
+        out.close();
+    }
+}
+
 
 std::string getFilename(std::ifstream &in) {
     std::string res;
@@ -183,11 +186,7 @@ std::string getFilename(std::ifstream &in) {
     return res;
 }
 
-int main(int argc, char **argv) {
-    llvm::cl::ParseCommandLineOptions(argc, argv);
-    std::cout << "Hello World!" << std::endl;
-
-
+void monitor(SharedQueue &sharedqueue) {
     int fdnotify = -1;
     fdnotify = inotify_init();
 
@@ -201,10 +200,7 @@ int main(int argc, char **argv) {
         perror("inotify_add_watch failed");
         exit(1);
     }
-
     std::ifstream in(InputFile2.c_str());
-    Solution *solution = new Solution(BuilderKind.getValue());
-
     while (1) {
         int len, i = 0;
         std::string InputFile;
@@ -222,20 +218,39 @@ int main(int argc, char **argv) {
             i += EVENT_SIZE + sizeof(buffer);
         }
 
-
-        auto MBResult = MemoryBuffer::getFile(InputFile.c_str());
-        if (!MBResult) {
-            llvm::errs() << InputFile.c_str() << ": error: " << MBResult.getError().message()
-                         << "\n";
-            return 1;
-        }
-        std::unique_ptr<MemoryBuffer> &MB = *MBResult;
-
-        std::vector<Decl *> decls;
-        solution->parse(InputFile, MB.get(), decls);
-        solution->computeInitialValue(decls, InputFile);
-
-        InputFile.clear();
-//        llvm::llvm_shutdown();
+        sharedqueue.push_back(InputFile);
     }
+}
+void solve(Solution* &solution, SharedQueue &sharedqueue) {
+    while (1) {
+        while (!sharedqueue.empty()) {
+            std::string InputFile = sharedqueue.front();
+            sharedqueue.pop_front();
+
+            auto MBResult = MemoryBuffer::getFile(InputFile.c_str());
+            if (!MBResult) {
+                llvm::errs() << InputFile.c_str() << ": error: " << MBResult.getError().message()
+                             << "\n";
+                exit(1);
+            }
+            std::unique_ptr<MemoryBuffer> &MB = *MBResult;
+
+            std::vector<Decl *> decls;
+            solution->parse(InputFile, MB.get(), decls);
+            solution->computeInitialValue(decls, InputFile);
+            std::cout << "start sleep" <<std::endl;
+            usleep(3000000);
+            std::cout << "end sleep" << std::endl;
+            InputFile.clear();
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    llvm::cl::ParseCommandLineOptions(argc, argv);
+    Solution *solution = new Solution(BuilderKind.getValue());
+    SharedQueue queue;
+
+    std::thread monitor_thread(monitor, std::ref(queue));
+    solve(solution, queue);
 }
