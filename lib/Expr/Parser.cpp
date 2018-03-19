@@ -107,8 +107,8 @@ namespace {
     typedef std::map<const Identifier*, ExprHandle> ExprSymTabTy;
     typedef std::map<const Identifier*, VersionHandle> VersionSymTabTy;
 
-    const std::string Filename;
-    const MemoryBuffer *TheMemoryBuffer;
+      std::string Filename;
+      MemoryBuffer *TheMemoryBuffer;
     ExprBuilder *Builder;
     ArrayCache TheArrayCache;
     bool ClearArrayAfterQuery;
@@ -323,7 +323,7 @@ namespace {
     void Error(const char *Message) { Error(Message, Tok); }
 
   public:
-    ParserImpl(const std::string _Filename, const MemoryBuffer *MB,
+    ParserImpl(std::string _Filename, MemoryBuffer *MB,
                ExprBuilder *_Builder, bool _ClearArrayAfterQuery)
         : Filename(_Filename), TheMemoryBuffer(MB), Builder(_Builder),
           ClearArrayAfterQuery(_ClearArrayAfterQuery), TheLexer(MB),
@@ -350,6 +350,14 @@ namespace {
     virtual unsigned GetNumErrors() const {
       return NumErrors; 
     }
+
+      virtual void updateParserImpl(std::string filename, llvm::MemoryBuffer *MB, ExprBuilder *Builder) {
+          Filename = filename;
+          TheMemoryBuffer = MB;
+          TheLexer = Lexer(MB);
+          ClearArrayAfterQuery = false;
+        Initialize();
+      }
   };
 }
 
@@ -1645,7 +1653,7 @@ Parser::Parser() {
 Parser::~Parser() {
 }
 
-Parser *Parser::Create(const std::string Filename, const MemoryBuffer *MB,
+Parser *Parser::Create(std::string Filename, MemoryBuffer *MB,
                        ExprBuilder *Builder, bool ClearArrayAfterQuery) {
   ParserImpl *P = new ParserImpl(Filename, MB, Builder, ClearArrayAfterQuery);
   P->Initialize();

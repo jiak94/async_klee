@@ -157,7 +157,8 @@ void TreeStreamWriter::readStream(TreeStreamID streamID,
         while (size--) is.get();
       }
     }
-  }  
+  }
+  is.close();
 }
 
 ///

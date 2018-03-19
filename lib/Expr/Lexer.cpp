@@ -63,7 +63,7 @@ static inline bool isInternalIdentifierChar(int Char) {
   return isalnum(Char) || Char == '_' || Char == '.' || Char == '-';
 }
 
-Lexer::Lexer(const llvm::MemoryBuffer *MB) 
+Lexer::Lexer(llvm::MemoryBuffer *MB)
   : BufferPos(MB->getBufferStart()), BufferEnd(MB->getBufferEnd()), 
     LineNumber(1), ColumnNumber(0) {
 }

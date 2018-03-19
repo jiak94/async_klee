@@ -220,7 +220,7 @@ namespace expr {
     ///
     /// \return NULL indicates the end of the file has been reached.
     virtual Decl *ParseTopLevelDecl() = 0;
-
+    virtual void updateParserImpl(std::string filename, llvm::MemoryBuffer *MB, ExprBuilder *Builder) = 0;
     /// CreateParser - Create a parser implementation for the given
     /// MemoryBuffer.
     ///
@@ -228,7 +228,7 @@ namespace expr {
     /// \arg MB - The input data.
     /// \arg Builder - The expression builder to use for constructing
     /// expressions.
-    static Parser *Create(const std::string Name, const llvm::MemoryBuffer *MB,
+    static Parser *Create(std::string Name, llvm::MemoryBuffer *MB,
                           ExprBuilder *Builder, bool ClearArrayAfterQuery);
   };
 }
